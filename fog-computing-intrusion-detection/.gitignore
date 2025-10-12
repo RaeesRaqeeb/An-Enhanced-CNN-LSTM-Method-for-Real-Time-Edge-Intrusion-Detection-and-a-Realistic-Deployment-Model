@@ -87,3 +87,22 @@ target/
 
 # Mypy cache
 .mypy_cache/
+
+# Python
+__pycache__/
+*.pyc
+
+# Environment
+.env
+.venv/
+.envrc
+*.lock
+
+# Data
+data/raw/
+data/interim/
+data/processed/
+
+# Models
+models/
+reports/
