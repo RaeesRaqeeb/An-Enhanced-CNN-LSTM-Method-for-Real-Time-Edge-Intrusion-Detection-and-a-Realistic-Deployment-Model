@@ -1,4 +1,3 @@
-
 ### 👥 Collaboration Rules
 - Never push directly to `main` branch.
 - Create a new branch for every feature or bugfix:
