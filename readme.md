@@ -1,6 +1,6 @@
 ### 👥 Collaboration Rules
 - Never push directly to `main` branch.
-- Create a new branch for every feature or bugfix:
+- Push always to your branch
   `feature/<your-name>-<task>`
 - Commit small, meaningful changes.
 - Always open a Pull Request (PR) to merge into `dev` or `main`.
