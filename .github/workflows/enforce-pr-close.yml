@@ -1,80 +1,123 @@
-name: Enforce Issue Close by PR Only
+name: Enforce Issue Close Policy
 
 on:
   issues:
-    types: [closed]
+    types: [closed]      # Triggers when a new issue is closed
+  workflow_dispatch:     # Allows you to manually run an "Audit" on past issues
 
 permissions:
   issues: write
 
 jobs:
-  enforce-pr-close:
+  enforce-policy:
     runs-on: ubuntu-latest
     steps:
-      - name: Check closing reference
+      - name: Enforce Policy (Real-time & Audit)
         uses: actions/github-script@v6
         with:
           script: |
             // --- CONFIGURATION ---
-            // Add the GitHub usernames of admins who are allowed to close issues manually
-            const allowedUsers = ['your-github-username', 'another-admin-user']; 
+            // Add admins who are allowed to close issues manually
+            const allowedUsers = ['your-github-username', 'another-admin']; 
             // ---------------------
 
-            const actor = context.actor;
+            let issuesToCheck = [];
 
-            // 1. Check if the user is an Admin/Allowed user
-            if (allowedUsers.includes(actor)) {
-              console.log(`Issue closed by admin (${actor}). Allowed.`);
-              return; // Stop the script here, do not reopen.
+            // 1. DETERMINE MODE (Real-time vs Audit)
+            if (context.eventName === 'issues') {
+              // Real-time: Check only the specific issue that just closed
+              console.log(`Real-time mode: Checking Issue #${context.issue.number}`);
+              issuesToCheck.push(context.issue.number);
+            } else {
+              // Audit Mode: Fetch the last 100 closed issues
+              console.log("Audit mode: Fetching last 100 closed issues...");
+              const listQuery = `
+                query($owner: String!, $repo: String!) {
+                  repository(owner: $owner, name: $repo) {
+                    issues(states: CLOSED, first: 100, orderBy: {field: UPDATED_AT, direction: DESC}) {
+                      nodes { number }
+                    }
+                  }
+                }
+              `;
+              const listResult = await github.graphql(listQuery, {
+                owner: context.repo.owner,
+                repo: context.repo.repo
+              });
+              issuesToCheck = listResult.repository.issues.nodes.map(n => n.number);
             }
 
-            // 2. If not an admin, check if it was closed via PR
-            const query = `
-              query($owner: String!, $repo: String!, $issue_number: Int!) {
-                repository(owner: $owner, name: $repo) {
-                  issue(number: $issue_number) {
-                    timelineItems(last: 1, itemTypes: [CLOSED_EVENT]) {
-                      nodes {
-                        ... on ClosedEvent {
-                          closer {
-                            __typename
+            // 2. PROCESS ISSUES
+            // We query details for each issue to see HOW it was closed
+            for (const issueNum of issuesToCheck) {
+              
+              const detailQuery = `
+                query($owner: String!, $repo: String!, $issue_number: Int!) {
+                  repository(owner: $owner, name: $repo) {
+                    issue(number: $issue_number) {
+                      state
+                      timelineItems(last: 1, itemTypes: [CLOSED_EVENT]) {
+                        nodes {
+                          ... on ClosedEvent {
+                            actor { login }
+                            closer { __typename }
                           }
                         }
                       }
                     }
                   }
                 }
+              `;
+
+              const variables = {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNum
+              };
+
+              try {
+                const result = await github.graphql(detailQuery, variables);
+                const issueData = result.repository.issue;
+                
+                // Safety check: Ensure issue is actually closed (Audit might catch recently reopened ones)
+                if (issueData.state !== 'CLOSED') continue;
+
+                const closedEvent = issueData.timelineItems.nodes[0];
+                if (!closedEvent) continue; // Should not happen, but safety first
+
+                const closerType = closedEvent.closer ? closedEvent.closer.__typename : 'User';
+                const actor = closedEvent.actor ? closedEvent.actor.login : 'Unknown';
+
+                // CHECK: Is the user an Admin?
+                if (allowedUsers.includes(actor)) {
+                  console.log(`Issue #${issueNum} closed by admin (${actor}). Allowed.`);
+                  continue; 
+                }
+
+                // CHECK: Was it closed by a Pull Request?
+                if (closerType === 'PullRequest') {
+                  console.log(`Issue #${issueNum} closed by Pull Request. Allowed.`);
+                  continue;
+                }
+
+                // VIOLATION FOUND -> REOPEN
+                console.log(`VIOLATION: Issue #${issueNum} closed manually by ${actor}. Reopening...`);
+                
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNum,
+                  state: 'open'
+                });
+
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNum,
+                  body: `@${actor} ⚠️ **Policy Violation:** Issues cannot be closed manually.\n\nReopening this issue. Please link it to a Pull Request using "Closes #${issueNum}" and merge the PR.`
+                });
+
+              } catch (error) {
+                console.log(`Error processing issue #${issueNum}: ${error.message}`);
               }
-            `;
-
-            const variables = {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number
-            };
-
-            const result = await github.graphql(query, variables);
-            const closedEvent = result.repository.issue.timelineItems.nodes[0];
-            const closerType = closedEvent?.closer?.__typename;
-
-            if (closerType === 'PullRequest') {
-              console.log("Issue closed by Pull Request. Allowed.");
-              return;
             }
-
-            // 3. If neither Admin nor PR, Reopen the issue
-            console.log(`Issue closed manually by ${actor}. Reopening...`);
-            
-            await github.rest.issues.update({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              state: 'open'
-            });
-
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: `@${actor} ⚠️ **Policy Violation:** Issues cannot be closed manually.\n\nPlease link this issue to a Pull Request (e.g., "Closes #1") and merge it.`
-            });
