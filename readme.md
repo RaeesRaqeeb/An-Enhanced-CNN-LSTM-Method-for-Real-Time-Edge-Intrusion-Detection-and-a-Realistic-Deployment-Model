@@ -1,4 +1,4 @@
-### 👥 Collaboration Rules
+### Collaboration Rules
 - Never push directly to `main` branch.
 - Push always to your branch
 - Commit small, meaningful changes.
