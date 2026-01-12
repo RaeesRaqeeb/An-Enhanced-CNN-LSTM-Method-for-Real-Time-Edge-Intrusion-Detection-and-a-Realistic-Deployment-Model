@@ -1,8 +1,5 @@
 fog-computing-intrusion-detection
 ==============================
-
-This project is an implementation of a research paper and to compare performance on different ML models.
-
 Project Organization
 ------------
 
